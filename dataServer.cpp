@@ -14,10 +14,9 @@
 #define SERVER_BACKLOG 100
 #define MAXLINE 4096
 
-
-
 int bind_on_port (int sock, short port);
-void* put_in_queue(void* args);
+void* communicator_thread_function(void* args);
+void* worker_thread_function(void* args);
 void queue_files(char* path);
 
 typedef struct com_thread_args {
@@ -27,11 +26,12 @@ typedef struct com_thread_args {
 
 std::queue<char*> exe_queue;
 
-
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t condition_variable = PTHREAD_COND_INITIALIZER;
 
 int main(int argc, char** argv){
     short port;
-    int thread_pool_size, queue_size, block_size;
+    int thread_pool_size, queue_size, block_size, i;
 
     int server_socket, client_socket, address_len;
     struct sockaddr_in server_address, client_address;
@@ -52,6 +52,12 @@ int main(int argc, char** argv){
 
     /*--------------------------Getting Arguments--------------------------*/
 
+    /*--------------------------Creating Thread Pool--------------------------*/
+    pthread_t thread_pool[thread_pool_size];
+    for(i = 0; i < thread_pool_size; i++){
+        pthread_create(&thread_pool[i], NULL, worker_thread_function, NULL);
+    }
+    /*--------------------------Creating Thread Pool--------------------------*/
 
     /*--------------------------Open Bind and Listen--------------------------*/
     if((server_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0){ //0 is TCP
@@ -97,17 +103,12 @@ int main(int argc, char** argv){
         Args* args = (Args*)malloc(sizeof(Args));
         args->CS = client_socket;
         args->BLOCK = block_size;
-        pthread_create(&c_thread, NULL, put_in_queue, args);
+        pthread_create(&c_thread, NULL, communicator_thread_function, args);
         /*Create a thread for the client*/
 
     }
 
     /*--------------------------Waiting and Accepting Connections--------------------------*/
-
-
-
-
-
     return 1;
 }
 
@@ -119,7 +120,7 @@ int bind_on_port (int sock, short port){ //code from the class pdfs
     return bind(sock, (struct sockaddr *) &server, sizeof(server));
 }
 
-void* put_in_queue(void* args){
+void* communicator_thread_function(void* args){
     int client_socket = ((Args*)args)->CS;
     int size = ((Args*)args)->BLOCK;
     free(args);
@@ -145,6 +146,7 @@ void* put_in_queue(void* args){
         close(client_socket);
         return NULL;
     }
+
     queue_files(path);
 
     close(client_socket);
@@ -153,7 +155,7 @@ void* put_in_queue(void* args){
     return NULL;
 }
 
-void queue_files(char* path){
+void queue_files(char* path){ //pushes the files that it finds under the intial and all the subsequent foldiers in to the queue
     DIR* d = opendir(path); // open the path
     if(d == NULL){
         perror("Dir open");
@@ -164,7 +166,11 @@ void queue_files(char* path){
         if(dir->d_type != DT_DIR){
             char* file = (char*)malloc(sizeof(char[PATH_MAX]));
             sprintf(file, "%s/%s", path, dir->d_name);
+
+            pthread_mutex_lock(&mutex);
             exe_queue.push(file);
+            pthread_cond_signal(&condition_variable);
+            pthread_mutex_unlock(&mutex);
         }
         else if(dir -> d_type == DT_DIR && strcmp(dir->d_name,".")!=0 && strcmp(dir->d_name,"..")!=0 ){ // if it is a directory
             //printf("%s\n", dir->d_name); 
@@ -174,4 +180,21 @@ void queue_files(char* path){
         }
     }
     closedir(d); // finally close the directory
+}
+
+void* worker_thread_function(void* args){
+    char* file;
+    while(1){
+        pthread_mutex_lock(&mutex);
+        pthread_cond_wait(&condition_variable, &mutex);
+        file = exe_queue.front(); 
+        exe_queue.pop();
+        pthread_mutex_unlock(&mutex);
+        
+        if(file != NULL){
+            printf("%s\n", file);
+            free(file);
+        }
+    }
+    
 }

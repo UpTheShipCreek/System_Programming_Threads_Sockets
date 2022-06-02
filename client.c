@@ -67,7 +67,7 @@ int main(int argc, char** argv){
             exit(1);
         }
 
-        sprintf(sendline, "/home/xv6/Desktop/testing\n");
+        sprintf(sendline, "/home/xv6/Desktop/testing/dirtest\n");
         sendbytes = strlen(sendline);
 
         if(write(sockfd, sendline, sendbytes) != sendbytes){
