@@ -16,7 +16,7 @@
 #include <limits.h>
 #include <semaphore.h>
 
-#define SERVER_PORT 18000
+#define SERVER_PORT 1800
 #define REQUESTS 5
 #define MAXLINE 4096
 #define SA struct sockaddr
@@ -67,7 +67,7 @@ int main(int argc, char** argv){
             exit(1);
         }
 
-        sprintf(sendline, "/home/xv6/Desktop/testing/sockets.c\n");
+        sprintf(sendline, "/home/xv6/Desktop/testing\n");
         sendbytes = strlen(sendline);
 
         if(write(sockfd, sendline, sendbytes) != sendbytes){
