@@ -14,29 +14,46 @@
 #define SERVER_BACKLOG 100
 #define MAXLINE 4096
 
-int bind_on_port (int sock, short port);
-void* communicator_thread_function(void* args);
-void* worker_thread_function(void* args);
-void queue_files(char* path);
+typedef struct request{
+    int Client;
+    char Path[PATH_MAX];
+}Request;
 
 typedef struct com_thread_args {
     int CS;
     int BLOCK;
 }Args;
 
-std::queue<char*> exe_queue;
+int bind_on_port (int sock, short port);
+void* communicator_thread_function(void* args);
+void* worker_thread_function(void* args);
+int queue_files(char* path, int client); //pushes the full paths of the files of the client's request into the execution queue and returns the number of them
+void* handle_request(Request* request);
+int count_files_in_req(char* path);
+
+std::queue<Request*> exe_queue;
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t condition_variable = PTHREAD_COND_INITIALIZER;
 
+pthread_mutex_t c_thread_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t c_thread_cv = PTHREAD_COND_INITIALIZER;
+
+int* block_size, *queue_size;
+
 int main(int argc, char** argv){
     short port;
-    int thread_pool_size, queue_size, block_size, i;
+    int thread_pool_size, /*queue_size, /*block_size,*/ i;
+
+    int enable;
 
     int server_socket, client_socket, address_len;
     struct sockaddr_in server_address, client_address;
 
     char s_address[MAXLINE+1];
+
+    block_size = (int*)malloc(sizeof(int));
+    queue_size = (int*)malloc(sizeof(int));
 
     /*--------------------------Getting Arguments--------------------------*/
     if(argc != 9){
@@ -46,9 +63,9 @@ int main(int argc, char** argv){
 
     port = atoi(argv[2]);  //number of creatures for our society
     thread_pool_size = atoi(argv[4]);  //number of actions
-    queue_size = atoi(argv[6]);
-    block_size = atoi(argv[8]);
-    printf("Server's parameters are\nport: %d\nthread_pool_size: %d\nqueue_size: %d\nblock_size %d\n", port, thread_pool_size, queue_size, block_size);
+    (*queue_size) = atoi(argv[6]);
+    (*block_size) = atoi(argv[8]);
+    printf("Server's parameters are\nport: %d\nthread_pool_size: %d\nqueue_size: %d\nblock_size %d\n", port, thread_pool_size, (*queue_size), (*block_size));
 
     /*--------------------------Getting Arguments--------------------------*/
 
@@ -63,6 +80,12 @@ int main(int argc, char** argv){
     if((server_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0){ //0 is TCP
         perror("socket create");
         exit(1);
+    }
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0){
+        perror("setsockopt(SO_REUSEADDR) failed");
+    }
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEPORT, &enable, sizeof(int)) < 0){
+        perror("setsockopt(SO_REUSEPORT) failed");
     }
     if(bind_on_port(server_socket, port) < 0){
         perror("bind");
@@ -95,20 +118,21 @@ int main(int argc, char** argv){
 
         /*Converting the address into a string just so we can look at it and print it*/
         inet_ntop(AF_INET, &client_address, s_address, MAXLINE); 
-        printf("Accepted connection from  %s\n", s_address);
+        printf("Accepted connection from  %s\n\n", s_address);
         /*Converting the address into a string just so we can look at it and print it*/
 
         /*Create a thread for the client*/
         pthread_t c_thread;
         Args* args = (Args*)malloc(sizeof(Args));
         args->CS = client_socket;
-        args->BLOCK = block_size;
+        args->BLOCK = (*block_size); //no longer need that since it's a global variable
         pthread_create(&c_thread, NULL, communicator_thread_function, args);
         /*Create a thread for the client*/
 
     }
 
     /*--------------------------Waiting and Accepting Connections--------------------------*/
+    free(block_size);
     return 1;
 }
 
@@ -121,6 +145,8 @@ int bind_on_port (int sock, short port){ //code from the class pdfs
 }
 
 void* communicator_thread_function(void* args){
+    char no_o_files;
+    char expect_message[*block_size];
     int client_socket = ((Args*)args)->CS;
     int size = ((Args*)args)->BLOCK;
     free(args);
@@ -147,54 +173,110 @@ void* communicator_thread_function(void* args){
         return NULL;
     }
 
-    queue_files(path);
+    if(exe_queue.size() == (*queue_size)){ //if the queue is full 
+        pthread_cond_wait(&c_thread_cv, &c_thread_lock); //wait for the signal that something was removed from it
+    }
+    no_o_files = '0' + queue_files(path, client_socket); //queue the requests
 
-    close(client_socket);
-    printf("closing connection\n");
+    /* WEIRD LETS SEE */
+    // memset(expect_message, 0, sizeof(expect_message));
+    // sprintf(expect_message, "NO: %c", no_o_files);
+    // expect_message[strcspn(expect_message, "\0")] = ' ';
+    // sprintf(expect_message, "NO: %c\n", no_o_files);
+    // write(client_socket, expect_message, sizeof(expect_message));
+    // printf("Expect message %s", expect_message);
+    write(client_socket, "NO: ", 4);
+    write(client_socket, &no_o_files, 1);
+    write(client_socket, "\n", 1);
+    //printf("%s\n", expect_message);
+    /* WEIRD LETS SEE */
+    
+    //write(client_socket, &no_o_files, sizeof(char)); // Send how many files it should expect
+
+    //if(exe_queue.empty()) close(client_socket); // that has to suffice for now
 
     return NULL;
 }
 
-void queue_files(char* path){ //pushes the files that it finds under the intial and all the subsequent foldiers in to the queue
+int queue_files(char* path, int client){ //pushes the files that it finds under the intial and all the subsequent foldiers in to the queue
+    int file_count = 0;
     DIR* d = opendir(path); // open the path
     if(d == NULL){
         perror("Dir open");
-        return;
+        return -1;
     }
-    struct dirent * dir; // for the directory entries
+    Request* req = (Request*)malloc(sizeof(Request));
+    req->Client = client;
+    struct dirent* dir; // for the directory entries
     while ((dir = readdir(d)) != NULL){ // if we were able to read somehting from the directory
         if(dir->d_type != DT_DIR){
-            char* file = (char*)malloc(sizeof(char[PATH_MAX]));
-            sprintf(file, "%s/%s", path, dir->d_name);
-
+            file_count++;
+            sprintf(req->Path, "%s/%s", path, dir->d_name);
             pthread_mutex_lock(&mutex);
-            exe_queue.push(file);
+            exe_queue.push(req);
             pthread_cond_signal(&condition_variable);
             pthread_mutex_unlock(&mutex);
+            printf("Added <%s/%s> to the queue\n", path, dir->d_name);
         }
         else if(dir -> d_type == DT_DIR && strcmp(dir->d_name,".")!=0 && strcmp(dir->d_name,"..")!=0 ){ // if it is a directory
             //printf("%s\n", dir->d_name); 
-            char d_path[PATH_MAX]; // here I am using sprintf which is safer than strcat
+            char d_path[PATH_MAX]; 
             sprintf(d_path, "%s/%s", path, dir->d_name);
-            queue_files(d_path); // recall with the new path
+            file_count += queue_files(d_path, client); // recall with the new path
         }
     }
     closedir(d); // finally close the directory
+    return file_count;
 }
 
 void* worker_thread_function(void* args){
-    char* file;
+    Request* req;
     while(1){
         pthread_mutex_lock(&mutex);
         pthread_cond_wait(&condition_variable, &mutex);
-        file = exe_queue.front(); 
+        req = exe_queue.front(); 
         exe_queue.pop();
         pthread_mutex_unlock(&mutex);
-        
-        if(file != NULL){
-            printf("%s\n", file);
-            free(file);
+
+        pthread_mutex_lock(&c_thread_lock);
+        pthread_cond_signal(&c_thread_cv); //signal that the queue is not full anymore so that the communicator can push a request in it
+        pthread_mutex_unlock(&c_thread_lock); 
+
+        if(req != NULL){
+            printf("Recieved task <%s, %d>\n", req->Path, req->Client);
+            handle_request(req);
+            free(req);
         }
     }
-    
+}
+
+void* handle_request(Request* request){
+    char expect_file[*block_size]; //full replay message message
+    char buffer[(*block_size)];
+    size_t bytes_read;
+
+    FILE* fp = fopen(request->Path, "r");
+    if(fp == NULL){
+        perror("File open");
+        close(request->Client);
+        return NULL;
+    }
+    //printf("About to read file %s\n", request->Path);
+
+    /* Fuck this I am not doing it */
+    write(request->Client, "FILE: ", 6);
+    write(request->Client, request->Path, strlen(request->Path)*sizeof(char));
+    write(request->Client, "\n", 1);
+
+    /**/
+    write(request->Client, "CONTENTS: \n", 11);
+    while((bytes_read = fread(buffer, 1, (*block_size), fp)) > 0){
+        //printf("sending %ld bytes\n", bytes_read);
+        write(request->Client, buffer, bytes_read);
+        //printf("Wrote %s\n", buffer); //remove
+        memset(buffer, 0, (*block_size));
+    }
+    //write(request->Client, "\n", 11);
+    fclose(fp);
+    return NULL;
 }
