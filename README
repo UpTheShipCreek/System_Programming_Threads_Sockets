@@ -1,0 +1,39 @@
+sdi1700113 Panagiotopoulos Georgios
+
+------Compilation kai Klhsh------
+$ make dataServer
+$ make remoteClient
+$ ./dataServer -p <port> -s <thread_pool_size> -q <queue_size> -b <block_size>
+$ ./remoteClient -i <server_ip> -p <server_port> -d <directory>
+
+------------Cleanup--------------
+$ make clean
+
+-----------------About-----------------
+My implementation is bugged in man ways. The most obvious one is that the Client won't understand what the server is sending to it
+if the whole the message can't be trasferd in one client's buffer (which is 8192 bytes in this case). 
+The struct Args is completely redundant, I just didn't have time to change the implementation. 
+I used it to pass the buffer size into the communicator thread function but I ended up making it a global variable.
+
+The communicator threads, read the filepath from the client and bind it the client's Id through the struct Request, 
+which is what eventually gets pushed into the queue. 
+
+The worker threads then take the request, read the file from the saved path and send the contents to the client. 
+
+My communication protocol is extremely as well. The responsible communicator thread finds out the number of files that it will transfer 
+and sends the number to the client. The way I implemented the client though, barely uses that information.
+The worker threads send the word "FILE:" before sending the path of the file that they are about  to read.
+Before they start sending what they are reading they first send "CONTENTS: ", in order for the client to be able to differantiate between the name of the file 
+and its contents
+
+The client isolates the bytes that exist between the two extra messages "FILE: " and "CONTENTS" and either creates a file with the path or write into the file
+the contents.
+
+
+
+
+
+
+
+
+

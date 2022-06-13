@@ -1,49 +1,10 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/socket.h> //sockets
-#include <sys/types.h> //sockets
-#include <netinet/in.h> //struct sockaddr_in
-#include <arpa/inet.h> //hton
-#include <pthread.h> //thread functions
-#include <limits.h> //PATH_MAX
-#include <queue> //queues
-#include <string.h> //string functions
-#include <unistd.h> //close
-#include <dirent.h> //searching the directory for files
-
-#define SERVER_BACKLOG 100
-#define MAXLINE 4096
-
-typedef struct request{
-    int Client;
-    char Path[PATH_MAX];
-}Request;
-
-typedef struct com_thread_args {
-    int CS;
-    int BLOCK;
-}Args;
-
-int bind_on_port (int sock, short port);
-void* communicator_thread_function(void* args);
-void* worker_thread_function(void* args);
-int queue_files(char* path, int client); //pushes the full paths of the files of the client's request into the execution queue and returns the number of them
-void* handle_request(Request* request);
-int count_files_in_req(char* path);
-
-std::queue<Request*> exe_queue;
-
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t condition_variable = PTHREAD_COND_INITIALIZER;
-
-pthread_mutex_t c_thread_lock = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t c_thread_cv = PTHREAD_COND_INITIALIZER;
-
-int* block_size, *queue_size;
+#include "dataServer.h"
 
 int main(int argc, char** argv){
     short port;
     int thread_pool_size, /*queue_size, /*block_size,*/ i;
+
+    extern int* block_size, *queue_size;
 
     int enable;
 
@@ -51,7 +12,7 @@ int main(int argc, char** argv){
     struct sockaddr_in server_address, client_address;
 
     char s_address[MAXLINE+1];
-
+    
     block_size = (int*)malloc(sizeof(int));
     queue_size = (int*)malloc(sizeof(int));
 
@@ -200,7 +161,7 @@ void* communicator_thread_function(void* args){
     return NULL;
 }
 
-int queue_files(char* path, int client){ //pushes the files that it finds under the intial and all the subsequent foldiers in to the queue
+int queue_files(char* path, int client){ //pushes the files that it finds under the intial and all the subsequent foldiers, into the queue
     int file_count = 0;
     DIR* d = opendir(path); // open the path
     if(d == NULL){
@@ -247,7 +208,7 @@ void* worker_thread_function(void* args){
         if(req != NULL){
             printf("<%d> Recieved task <%s, %d>\n", gettid(), req->Path, req->Client);
             handle_request(req);
-            //free(req); //den kanw fexei bug kai kanei double free
+            //free(req); //yeah this free is bugged, so the requests don't get freed
         }
     }
 }
@@ -265,20 +226,17 @@ void* handle_request(Request* request){
     }
     //printf("About to read file %s\n", request->Path);
 
-    /* Fuck this I am not doing it */
     write(request->Client, "FILE: ", 6);
     write(request->Client, request->Path, strlen(request->Path)*sizeof(char));
-    //write(request->Client, "\n", 1);
+
 
     /**/
     write(request->Client, "CONTENTS: ", 10);
     while((bytes_read = fread(buffer, 1, (*block_size)-1, fp)) > 0){
         printf("<%d> Sending %ld bytes\n", gettid(), bytes_read);
         write(request->Client, buffer, bytes_read);
-        //printf("Wrote %s\n", buffer); //remove
         memset(buffer, 0, (*block_size));
     }
-    //write(request->Client, "\n", 11);
     fclose(fp);
     return NULL;
 }
