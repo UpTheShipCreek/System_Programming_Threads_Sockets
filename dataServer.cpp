@@ -121,6 +121,7 @@ int main(int argc, char** argv){
         printf("Accepted connection from  %s\n\n", s_address);
         /*Converting the address into a string just so we can look at it and print it*/
 
+        printf("Creating a thread for it \n");
         /*Create a thread for the client*/
         pthread_t c_thread;
         Args* args = (Args*)malloc(sizeof(Args));
@@ -128,11 +129,12 @@ int main(int argc, char** argv){
         args->BLOCK = (*block_size); //no longer need that since it's a global variable
         pthread_create(&c_thread, NULL, communicator_thread_function, args);
         /*Create a thread for the client*/
+        printf("Okay I created the thread \n");
 
     }
 
     /*--------------------------Waiting and Accepting Connections--------------------------*/
-    free(block_size);
+   //free(block_size);
     return 1;
 }
 
@@ -145,6 +147,7 @@ int bind_on_port (int sock, short port){ //code from the class pdfs
 }
 
 void* communicator_thread_function(void* args){
+    printf("I am the thread, lets see what we got\n");
     char no_o_files;
     char expect_message[*block_size];
     int client_socket = ((Args*)args)->CS;
@@ -153,16 +156,12 @@ void* communicator_thread_function(void* args){
 
     char buffer[size];
     size_t bytes_read;
-    int msgsize = 0;
     char path[PATH_MAX+1];
 
-    while((bytes_read = read(client_socket, buffer+msgsize, sizeof(buffer) - msgsize-1)) > 0){
-        msgsize+=bytes_read;
-        if(msgsize > size-1 || buffer[msgsize-1] == '\n') break;
-    }
-
-    // check(bytes_read, "recv error");
-    buffer[msgsize-1] = 0; //null terminate the message
+    printf("Reading client's request...\n");
+    bytes_read = read(client_socket, buffer, sizeof(buffer));
+    
+    buffer[bytes_read] = 0; //null terminate the message
 
     printf("Request: %s\n", buffer);
     fflush(stdout);
@@ -172,9 +171,12 @@ void* communicator_thread_function(void* args){
         close(client_socket);
         return NULL;
     }
+    printf("Client wants everything in this dierectory: %s\n", path);
 
     if(exe_queue.size() == (*queue_size)){ //if the queue is full 
+        pthread_mutex_lock(&c_thread_lock);
         pthread_cond_wait(&c_thread_cv, &c_thread_lock); //wait for the signal that something was removed from it
+        pthread_mutex_unlock(&c_thread_lock); 
     }
     no_o_files = '0' + queue_files(path, client_socket); //queue the requests
 
@@ -187,7 +189,7 @@ void* communicator_thread_function(void* args){
     // printf("Expect message %s", expect_message);
     write(client_socket, "NO: ", 4);
     write(client_socket, &no_o_files, 1);
-    write(client_socket, "\n", 1);
+    //write(client_socket, "\n", 1);
     //printf("%s\n", expect_message);
     /* WEIRD LETS SEE */
     
@@ -216,7 +218,7 @@ int queue_files(char* path, int client){ //pushes the files that it finds under 
             exe_queue.push(req);
             pthread_cond_signal(&condition_variable);
             pthread_mutex_unlock(&mutex);
-            printf("Added <%s/%s> to the queue\n", path, dir->d_name);
+            //printf("Added <%s/%s> to the queue\n", path, dir->d_name);
         }
         else if(dir -> d_type == DT_DIR && strcmp(dir->d_name,".")!=0 && strcmp(dir->d_name,"..")!=0 ){ // if it is a directory
             //printf("%s\n", dir->d_name); 
@@ -243,9 +245,9 @@ void* worker_thread_function(void* args){
         pthread_mutex_unlock(&c_thread_lock); 
 
         if(req != NULL){
-            printf("Recieved task <%s, %d>\n", req->Path, req->Client);
+            printf("<%d> Recieved task <%s, %d>\n", gettid(), req->Path, req->Client);
             handle_request(req);
-            free(req);
+            //free(req); //den kanw fexei bug kai kanei double free
         }
     }
 }
@@ -266,12 +268,12 @@ void* handle_request(Request* request){
     /* Fuck this I am not doing it */
     write(request->Client, "FILE: ", 6);
     write(request->Client, request->Path, strlen(request->Path)*sizeof(char));
-    write(request->Client, "\n", 1);
+    //write(request->Client, "\n", 1);
 
     /**/
-    write(request->Client, "CONTENTS: \n", 11);
-    while((bytes_read = fread(buffer, 1, (*block_size), fp)) > 0){
-        //printf("sending %ld bytes\n", bytes_read);
+    write(request->Client, "CONTENTS: ", 10);
+    while((bytes_read = fread(buffer, 1, (*block_size)-1, fp)) > 0){
+        printf("<%d> Sending %ld bytes\n", gettid(), bytes_read);
         write(request->Client, buffer, bytes_read);
         //printf("Wrote %s\n", buffer); //remove
         memset(buffer, 0, (*block_size));
