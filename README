@@ -1,5 +1,3 @@
-sdi1700113 Panagiotopoulos Georgios
-
 ------Compilation kai Klhsh------
 $ make dataServer
 $ make remoteClient
@@ -20,7 +18,7 @@ which is what eventually gets pushed into the queue.
 
 The worker threads then take the request, read the file from the saved path and send the contents to the client. 
 
-My communication protocol is extremely as well. The responsible communicator thread finds out the number of files that it will transfer 
+My communication protocol is extremely primitive as well. The responsible communicator thread finds out the number of files that it will transfer 
 and sends the number to the client. The way I implemented the client though, barely uses that information.
 The worker threads send the word "FILE:" before sending the path of the file that they are about  to read.
 Before they start sending what they are reading they first send "CONTENTS: ", in order for the client to be able to differantiate between the name of the file 
